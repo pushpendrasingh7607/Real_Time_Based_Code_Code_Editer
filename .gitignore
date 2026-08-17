@@ -1,0 +1,27 @@
+# ── Dependencies ──────────────────────────────────
+node_modules/
+.npm
+
+# ── Environment variables (NEVER commit secrets) ──
+.env
+.env.local
+.env.*.local
+
+# ── Build output ──────────────────────────────────
+client/dist/
+client/.vite/
+
+# ── Logs ──────────────────────────────────────────
+*.log
+npm-debug.log*
+/tmp/codesync-*
+
+# ── OS files ──────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Editor files ──────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
