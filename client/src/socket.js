@@ -1,18 +1,20 @@
 /**
  * socket.js — Socket.IO client singleton
  *
- * SERVER_URL is read from VITE_SERVER_URL environment variable.
- * - In development: set in .env.local (default: http://127.0.0.1:3001)
- * - In production:  set in Vercel dashboard as VITE_SERVER_URL = https://your-railway-url.railway.app
+ * SERVER_URL behaviour:
+ * - Development: reads VITE_SERVER_URL from .env.local (defaults to http://127.0.0.1:3001)
+ * - Production (single-deployment on Render): VITE_SERVER_URL is NOT set,
+ *   so we pass an empty string '' which tells socket.io-client to connect
+ *   to the same origin as the page — i.e. the Render URL that serves both
+ *   the API and the built React app.
  *
  * Security:
  * - Never store auth tokens in localStorage
- * - TODO(security): Add JWT cookie-based auth for production
  */
 import { io } from 'socket.io-client';
 
-// Falls back to local dev server if env var not set
-const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'http://127.0.0.1:3001';
+// Dev: 'http://127.0.0.1:3001'  |  Prod (single-deploy): '' (same origin)
+const SERVER_URL = import.meta.env.VITE_SERVER_URL ?? '';
 
 const socket = io(SERVER_URL, {
   autoConnect: false,

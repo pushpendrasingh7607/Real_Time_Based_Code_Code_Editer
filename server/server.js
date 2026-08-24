@@ -54,12 +54,23 @@ const DEV_ORIGINS = Array.from({ length: 20 }, (_, i) => [
 
 // In production, CLIENT_URL env var must be set to your Vercel URL
 // e.g. https://codesync.vercel.app
-const PROD_ORIGINS = process.env.CLIENT_URL
-  ? [process.env.CLIENT_URL, process.env.CLIENT_URL.replace('https://', 'http://')]
-  : [];
+// In production: CLIENT_URL (manual override) OR Render auto-sets RENDER_EXTERNAL_URL
+const PROD_ORIGINS = [];
+if (process.env.CLIENT_URL) {
+  PROD_ORIGINS.push(
+    process.env.CLIENT_URL,
+    process.env.CLIENT_URL.replace('https://', 'http://'),
+  );
+}
+if (process.env.RENDER_EXTERNAL_URL) {
+  PROD_ORIGINS.push(
+    process.env.RENDER_EXTERNAL_URL,
+    process.env.RENDER_EXTERNAL_URL.replace('https://', 'http://'),
+  );
+}
 
 if (IS_PROD && PROD_ORIGINS.length === 0) {
-  console.error('[SECURITY] CLIENT_URL env variable is not set! CORS will block all requests.');
+  console.warn('[WARN] No CLIENT_URL or RENDER_EXTERNAL_URL set — CORS will only allow same-origin requests.');
 }
 
 const ALLOWED_ORIGINS = IS_PROD ? PROD_ORIGINS : DEV_ORIGINS;
@@ -551,6 +562,19 @@ io.on('connection', (socket) => {
     }
   });
 });
+
+// ─── Serve built React frontend in production ────────────────────────────────
+// The client is built into ../client/dist. In production (Render), the build
+// step runs `npm run build` in the client directory first.
+const CLIENT_DIST = path.join(__dirname, '..', 'client', 'dist');
+if (IS_PROD && fs.existsSync(CLIENT_DIST)) {
+  app.use(express.static(CLIENT_DIST, { maxAge: '7d' }));
+  // SPA catch-all: any route not matched above returns index.html
+  app.get('*', (_req, res) => {
+    res.sendFile(path.join(CLIENT_DIST, 'index.html'));
+  });
+  console.log(`📦 Serving static client from: ${CLIENT_DIST}`);
+}
 
 // ─── Start Server ─────────────────────────────────────────────────────────────
 server.listen(PORT, HOST, () => {

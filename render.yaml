@@ -1,14 +1,12 @@
 services:
   - type: web
-    name: codesync-server
+    name: codesync
     runtime: node
-    rootDir: server
-    buildCommand: npm install
-    startCommand: node server.js
+    # rootDir is NOT set — we use the repo root so we can build client + server
+    buildCommand: "cd client && npm install && npm run build && cd ../server && npm install"
+    startCommand: "node server/server.js"
     envVars:
       - key: NODE_ENV
         value: production
       - key: PORT
-        value: 3001
-      - key: CLIENT_URL
-        sync: false   # You will paste your Vercel URL here after deploying the frontend
+        value: 10000
