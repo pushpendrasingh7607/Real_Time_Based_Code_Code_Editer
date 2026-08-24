@@ -1,7 +1,8 @@
 /**
  * Header.jsx — Top app bar
  *
- * Contains: Logo, Language selector, Run button, Connection status, Leave button
+ * Contains: Logo, Language selector, Run button, Connection status, Leave button,
+ *           and a hamburger menu toggle for the mobile sidebar.
  * Security: All rendered text is via React JSX (auto-escaped). No innerHTML.
  */
 import React, { useState } from 'react';
@@ -41,8 +42,7 @@ const LANG_META = {
   typescript: { icon: '🔷', label: 'TypeScript',  runnable: false },
 };
 
-function Header({ roomId, language, onLanguageChange, connected, onRun, onLeave, running }) {
-
+function Header({ roomId, language, onLanguageChange, connected, onRun, onLeave, running, onToggleSidebar, sidebarOpen }) {
   const [copied, setCopied] = useState(false);
 
   const handleCopyRoom = async () => {
@@ -58,6 +58,28 @@ function Header({ roomId, language, onLanguageChange, connected, onRun, onLeave,
   return (
     <header className="app-header" role="banner">
       <div className="header-left">
+        {/* Mobile hamburger — only visible on small screens */}
+        <button
+          id="btn-sidebar-toggle"
+          className="sidebar-hamburger"
+          onClick={onToggleSidebar}
+          aria-label={sidebarOpen ? 'Close sidebar' : 'Open sidebar'}
+          aria-expanded={sidebarOpen}
+          title="Toggle sidebar"
+        >
+          {sidebarOpen ? (
+            /* X icon */
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
+              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          ) : (
+            /* Hamburger icon */
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
+              <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+            </svg>
+          )}
+        </button>
+
         <div className="header-logo" aria-hidden="true">
           <span className="logo-symbol">{'</>'}</span>
         </div>
@@ -100,7 +122,7 @@ function Header({ roomId, language, onLanguageChange, connected, onRun, onLeave,
           aria-label={connected ? 'Connected' : 'Disconnected'}
         >
           <span className="connection-dot" aria-hidden="true"></span>
-          <span>{connected ? 'Live' : 'Offline'}</span>
+          <span className="connection-label">{connected ? 'Live' : 'Offline'}</span>
         </div>
 
         <button
@@ -118,7 +140,7 @@ function Header({ roomId, language, onLanguageChange, connected, onRun, onLeave,
               <polygon points="5,3 19,12 5,21"/>
             </svg>
           )}
-          <span>{running ? 'Running…' : 'Run'}</span>
+          <span className="btn-run-label">{running ? 'Running…' : 'Run'}</span>
         </button>
 
         <button
@@ -131,7 +153,7 @@ function Header({ roomId, language, onLanguageChange, connected, onRun, onLeave,
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
             <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16,17 21,12 16,7"/><line x1="21" y1="12" x2="9" y2="12"/>
           </svg>
-          <span>Leave</span>
+          <span className="btn-leave-label">Leave</span>
         </button>
       </div>
     </header>

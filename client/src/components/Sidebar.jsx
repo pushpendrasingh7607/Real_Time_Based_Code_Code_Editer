@@ -1,6 +1,9 @@
 /**
  * Sidebar.jsx — Connected users & room info panel
  *
+ * On desktop: fixed left panel.
+ * On mobile: overlay drawer that slides in from the left.
+ *
  * Security: All user data displayed via React JSX text interpolation (auto-escaped).
  * No dangerouslySetInnerHTML or innerHTML used.
  */
@@ -27,7 +30,7 @@ function UserAvatar({ user, isSelf }) {
   );
 }
 
-function Sidebar({ users, roomId, username }) {
+function Sidebar({ users, roomId, username, isOpen, onClose }) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
@@ -41,7 +44,23 @@ function Sidebar({ users, roomId, username }) {
   };
 
   return (
-    <aside className="sidebar" aria-label="Room sidebar">
+    <aside
+      className={`sidebar ${isOpen ? 'sidebar-open' : ''}`}
+      aria-label="Room sidebar"
+      aria-hidden={!isOpen ? undefined : undefined}
+    >
+      {/* Mobile close button */}
+      <button
+        className="sidebar-close-btn"
+        onClick={onClose}
+        aria-label="Close sidebar"
+        title="Close sidebar"
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
+          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+
       {/* Room info */}
       <section className="sidebar-section" aria-labelledby="room-info-heading">
         <h2 id="room-info-heading" className="sidebar-section-title">Room</h2>
@@ -67,6 +86,8 @@ function Sidebar({ users, roomId, username }) {
             )}
           </button>
         </div>
+        {/* Full Room ID for easy sharing on mobile */}
+        <p className="room-id-full" title="Full Room ID">{roomId}</p>
       </section>
 
       {/* Users list */}
@@ -111,6 +132,7 @@ function Sidebar({ users, roomId, username }) {
           <li>Changes sync in real-time</li>
           <li>Run JS, Python, Java, C, C++</li>
           <li>Switch language for starter code</li>
+          <li>Drag the output panel to resize</li>
         </ul>
       </section>
     </aside>

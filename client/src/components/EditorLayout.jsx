@@ -31,6 +31,11 @@ const LANGUAGE_TEMPLATES = {
   typescript: '// TypeScript\nconst greet = (name: string): string => `Hello, ${name}!`;\nconsole.log(greet("World"));',
 };
 
+// Minimum and maximum output panel height (px)
+const OUTPUT_MIN_H = 80;
+const OUTPUT_MAX_H = 600;
+const OUTPUT_DEFAULT_H = 220;
+
 function EditorLayout({ roomId, username, onLeave }) {
   const [code, setCode] = useState(DEFAULT_CODE);
   const [language, setLanguage] = useState(DEFAULT_LANG);
@@ -41,14 +46,22 @@ function EditorLayout({ roomId, username, onLeave }) {
   const [outputError, setOutputError] = useState(false);
   const [outputVisible, setOutputVisible] = useState(false);
   const [running, setRunning] = useState(false);
-  const [notification, setNotification] = useState('');
-  const versionRef = useRef(0);
-  const notifTimerRef = useRef(null);
+  const [notifications, setNotifications] = useState([]); // [{id, msg, type}]
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [outputHeight, setOutputHeight] = useState(OUTPUT_DEFAULT_H);
 
-  const showNotif = useCallback((msg) => {
-    setNotification(msg);
-    clearTimeout(notifTimerRef.current);
-    notifTimerRef.current = setTimeout(() => setNotification(''), 3000);
+  const versionRef = useRef(0);
+  const notifCountRef = useRef(0);
+  const dragRef = useRef({ dragging: false, startY: 0, startH: 0 });
+  const hasJoinedRef = useRef(false);
+
+  // ── Notification system ─────────────────────────────────────────────────
+  const showNotif = useCallback((msg, type = 'info') => {
+    const id = ++notifCountRef.current;
+    setNotifications((prev) => [...prev, { id, msg, type }]);
+    setTimeout(() => {
+      setNotifications((prev) => prev.filter((n) => n.id !== id));
+    }, 3500);
   }, []);
 
   // ── Socket lifecycle ────────────────────────────────────────────────────
@@ -74,9 +87,16 @@ function EditorLayout({ roomId, username, onLeave }) {
       setCode(c);
       setLanguage(l);
       setUsers(u || []);
+      // Show share-room toast only on first join
+      if (!hasJoinedRef.current) {
+        hasJoinedRef.current = true;
+        setTimeout(() => {
+          showNotif(`📋 Share Room ID to invite others`, 'info');
+        }, 800);
+      }
     });
 
-    socket.on('code-update', ({ code: c, version, senderId }) => {
+    socket.on('code-update', ({ code: c, version }) => {
       // Only apply if incoming version is newer (prevent echo loops)
       if (version >= versionRef.current) {
         versionRef.current = version;
@@ -90,14 +110,19 @@ function EditorLayout({ roomId, username, onLeave }) {
 
     socket.on('user-joined', ({ user, users: u }) => {
       setUsers(u || []);
-      showNotif(`${user.username} joined the room`);
+      showNotif(`👋 ${user.username} joined the room`, 'join');
     });
 
     socket.on('user-left', ({ userId, users: u }) => {
-      setUsers(u || []);
+      // Find the departed user's name from the current list before updating
+      setUsers((prev) => {
+        const departed = prev.find((usr) => usr.id === userId);
+        if (departed) showNotif(`👋 ${departed.username} left the room`, 'leave');
+        return u || [];
+      });
     });
 
-    socket.on('error-msg', ({ message }) => {
+    socket.on('error-msg', () => {
       // Generic error — never log sensitive details
       console.error('[Editor] Server error received');
     });
@@ -111,7 +136,7 @@ function EditorLayout({ roomId, username, onLeave }) {
       socket.off('user-joined');
       socket.off('user-left');
       socket.off('error-msg');
-  socket.off('connect_error');
+      socket.off('connect_error');
       socket.disconnect();
     };
   }, [roomId, username, showNotif]);
@@ -132,9 +157,6 @@ function EditorLayout({ roomId, username, onLeave }) {
       version: versionRef.current,
     });
   }, [roomId]);
-
-
-
 
   // ── Cursor change handler ────────────────────────────────────────────────
   const handleCursorChange = useCallback((position) => {
@@ -205,13 +227,57 @@ function EditorLayout({ roomId, username, onLeave }) {
     }
   }, [code, language]);
 
+  // ── Sidebar toggle (mobile) ───────────────────────────────────────────────
+  const handleToggleSidebar = useCallback(() => {
+    setSidebarOpen((prev) => !prev);
+  }, []);
+
+  const handleCloseSidebar = useCallback(() => {
+    setSidebarOpen(false);
+  }, []);
+
+  // ── Output panel drag-to-resize ───────────────────────────────────────────
+  const handleDragStart = useCallback((e) => {
+    e.preventDefault();
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    dragRef.current = { dragging: true, startY: clientY, startH: outputHeight };
+
+    const onMove = (ev) => {
+      if (!dragRef.current.dragging) return;
+      const y = ev.touches ? ev.touches[0].clientY : ev.clientY;
+      const delta = dragRef.current.startY - y; // dragging up = bigger panel
+      const newH = Math.min(OUTPUT_MAX_H, Math.max(OUTPUT_MIN_H, dragRef.current.startH + delta));
+      setOutputHeight(newH);
+    };
+
+    const onUp = () => {
+      dragRef.current.dragging = false;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('touchmove', onMove);
+      window.removeEventListener('touchend', onUp);
+    };
+
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    window.addEventListener('touchmove', onMove, { passive: false });
+    window.addEventListener('touchend', onUp);
+  }, [outputHeight]);
+
   return (
     <div className="editor-layout">
-      {notification && (
-        <div className="notification-toast" role="status" aria-live="polite">
-          {notification}
-        </div>
-      )}
+      {/* Notification toasts */}
+      <div className="toast-stack" aria-live="polite" aria-atomic="false">
+        {notifications.map((n) => (
+          <div
+            key={n.id}
+            className={`notification-toast toast-${n.type}`}
+            role="status"
+          >
+            {n.msg}
+          </div>
+        ))}
+      </div>
 
       {connError && (
         <div className="offline-banner" role="alert">
@@ -240,10 +306,27 @@ function EditorLayout({ roomId, username, onLeave }) {
         onRun={handleRun}
         onLeave={handleLeave}
         running={running}
+        onToggleSidebar={handleToggleSidebar}
+        sidebarOpen={sidebarOpen}
       />
 
       <div className="editor-body">
-        <Sidebar users={users} roomId={roomId} username={username} />
+        {/* Mobile sidebar backdrop */}
+        {sidebarOpen && (
+          <div
+            className="sidebar-backdrop"
+            onClick={handleCloseSidebar}
+            aria-hidden="true"
+          />
+        )}
+
+        <Sidebar
+          users={users}
+          roomId={roomId}
+          username={username}
+          isOpen={sidebarOpen}
+          onClose={handleCloseSidebar}
+        />
 
         <div className="editor-main">
           <Editor
@@ -258,6 +341,8 @@ function EditorLayout({ roomId, username, onLeave }) {
               isError={outputError}
               language={language}
               onClose={() => setOutputVisible(false)}
+              height={outputHeight}
+              onDragStart={handleDragStart}
             />
           )}
         </div>

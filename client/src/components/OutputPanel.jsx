@@ -2,6 +2,7 @@
  * OutputPanel.jsx — Code execution output panel
  *
  * Shows language badge, error/success styling, and output from backend execution.
+ * Includes a drag handle at the top for vertical resizing.
  * Security: Output rendered as React text node (never innerHTML / dangerouslySetInnerHTML).
  */
 import React from 'react';
@@ -14,7 +15,7 @@ const LANG_LABELS = {
   cpp:        { label: 'C++',        icon: '🔷' },
 };
 
-function OutputPanel({ output, isError, language, onClose }) {
+function OutputPanel({ output, isError, language, onClose, height, onDragStart }) {
   const meta = LANG_LABELS[language];
 
   return (
@@ -22,7 +23,21 @@ function OutputPanel({ output, isError, language, onClose }) {
       className={`output-panel ${isError ? 'output-error' : 'output-success'}`}
       role="region"
       aria-label="Code output"
+      style={{ height: `${height}px`, minHeight: `${height}px` }}
     >
+      {/* Drag handle — drag up to expand, drag down to shrink */}
+      <div
+        className="output-drag-handle"
+        onMouseDown={onDragStart}
+        onTouchStart={onDragStart}
+        title="Drag to resize output panel"
+        aria-label="Resize output panel"
+        role="separator"
+        aria-orientation="horizontal"
+      >
+        <span className="drag-handle-bar" aria-hidden="true" />
+      </div>
+
       <div className="output-header">
         <div className="output-title">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
