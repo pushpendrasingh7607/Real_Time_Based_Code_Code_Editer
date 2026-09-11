@@ -1,16 +1,13 @@
 services:
   - type: web
     name: codesync
-    runtime: node
-    # Builds the React client then installs server deps.
-    # The server serves the built client from ../client/dist in production.
-    buildCommand: "cd client && npm install && npm run build && cd ../server && npm install"
-    startCommand: "node server/server.js"
+    runtime: docker
+    # Root Dockerfile builds React client + Node.js server in one container.
+    # The server serves the built React app from /app/client/dist in production.
+    dockerfilePath: ./Dockerfile
     envVars:
       - key: NODE_ENV
         value: production
-      - key: PORT
-        value: 10000
-      # VITE_SERVER_URL must be EMPTY for single-deploy (client + server same origin).
-      # Render auto-sets RENDER_EXTERNAL_URL which the server uses for CORS.
-      # No CLIENT_URL needed — same-origin deployment.
+      # PORT is auto-injected by Render — no need to set it here.
+      # VITE_SERVER_URL is intentionally unset → same-origin mode (client served by same server).
+
