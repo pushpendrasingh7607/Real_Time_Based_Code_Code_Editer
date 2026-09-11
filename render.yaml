@@ -2,7 +2,8 @@ services:
   - type: web
     name: codesync
     runtime: node
-    # rootDir is NOT set — we use the repo root so we can build client + server
+    # Builds the React client then installs server deps.
+    # The server serves the built client from ../client/dist in production.
     buildCommand: "cd client && npm install && npm run build && cd ../server && npm install"
     startCommand: "node server/server.js"
     envVars:
@@ -10,3 +11,6 @@ services:
         value: production
       - key: PORT
         value: 10000
+      # VITE_SERVER_URL must be EMPTY for single-deploy (client + server same origin).
+      # Render auto-sets RENDER_EXTERNAL_URL which the server uses for CORS.
+      # No CLIENT_URL needed — same-origin deployment.

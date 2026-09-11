@@ -7,7 +7,7 @@
 FROM node:20-slim AS base
 
 # Install system dependencies for code execution
-# python3, openjdk-21-jdk, gcc, g++, make
+# python3, default-jdk (OpenJDK 17 on Debian 12), gcc, g++, make
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
