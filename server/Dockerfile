@@ -2,6 +2,7 @@
 # CodeSync Backend — Dockerfile
 # Includes: Node.js 20, Python 3, OpenJDK 21, GCC/G++
 # Security: runs as non-root user "codesync"
+# Build context: repo root (Railway uses root as build context)
 # ──────────────────────────────────────────────────────────────
 
 FROM node:20-slim AS base
@@ -28,11 +29,12 @@ RUN groupadd --gid 1001 codesync && \
 WORKDIR /app
 
 # ── Install Node.js dependencies ──────────────────────────────
-COPY package.json package-lock.json* ./
+# Copy from server/ subfolder (build context is repo root)
+COPY server/package.json server/package-lock.json* ./
 RUN npm ci --only=production && npm cache clean --force
 
 # ── Copy source ───────────────────────────────────────────────
-COPY server.js ./
+COPY server/server.js ./
 
 # ── Drop to non-root user ─────────────────────────────────────
 USER codesync
