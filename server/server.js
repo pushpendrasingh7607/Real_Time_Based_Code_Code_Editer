@@ -579,9 +579,11 @@ io.on('connection', (socket) => {
 });
 
 // ─── Serve built React frontend in production ────────────────────────────────
-// The client is built into ../client/dist. In production (Render), the build
-// step runs `npm run build` in the client directory first.
-const CLIENT_DIST = path.join(__dirname, '..', 'client', 'dist');
+// CLIENT_DIST env var allows overriding the path (set in Dockerfile for Docker deploys).
+// Local dev:  __dirname = .../realtime-code-editor/server  → '../client/dist' is correct
+// Docker:     __dirname = /app  (server.js copied flat) → must use /app/client/dist
+const CLIENT_DIST = process.env.CLIENT_DIST || path.join(__dirname, '..', 'client', 'dist');
+console.log(`[Static] CLIENT_DIST resolved to: ${CLIENT_DIST} (exists: ${fs.existsSync(CLIENT_DIST)})`);
 if (IS_PROD && fs.existsSync(CLIENT_DIST)) {
   app.use(express.static(CLIENT_DIST, { maxAge: '7d' }));
   // SPA catch-all: any route not matched above returns index.html

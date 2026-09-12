@@ -61,6 +61,9 @@ USER codesync
 # Set runtime environment — ensures 0.0.0.0 binding regardless of platform env var timing
 ENV NODE_ENV=production
 ENV HOST=0.0.0.0
+# CLIENT_DIST: absolute path to React build inside container
+# server.js is at /app/server.js (__dirname=/app), so client/dist is at /app/client/dist
+ENV CLIENT_DIST=/app/client/dist
 
 # Expose port — Render injects $PORT at runtime; server reads process.env.PORT
 # HOST is set to 0.0.0.0 via ENV above so Render can detect the open port
