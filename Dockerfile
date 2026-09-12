@@ -58,8 +58,13 @@ COPY --from=client-build /build/client/dist ./client/dist
 # Drop to non-root user
 USER codesync
 
-# Expose port (Render injects $PORT; default 3001)
-EXPOSE 3001
+# Set runtime environment — ensures 0.0.0.0 binding regardless of platform env var timing
+ENV NODE_ENV=production
+ENV HOST=0.0.0.0
+
+# Expose port — Render injects $PORT at runtime; server reads process.env.PORT
+# HOST is set to 0.0.0.0 via ENV above so Render can detect the open port
+EXPOSE 10000
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \

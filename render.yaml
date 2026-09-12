@@ -5,9 +5,14 @@ services:
     # Root Dockerfile builds React client + Node.js server in one container.
     # The server serves the built React app from /app/client/dist in production.
     dockerfilePath: ./Dockerfile
+    # Render scans for open ports on 0.0.0.0. The server binds HOST=0.0.0.0 via Dockerfile ENV.
+    # Port 10000 is Render's default for Docker-based web services.
+    healthCheckPath: /health
     envVars:
       - key: NODE_ENV
         value: production
-      # PORT is auto-injected by Render — no need to set it here.
+      - key: PORT
+        value: 10000
+      - key: HOST
+        value: 0.0.0.0
       # VITE_SERVER_URL is intentionally unset → same-origin mode (client served by same server).
-

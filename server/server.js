@@ -12,7 +12,8 @@
  * - Binary paths hardcoded (allow-list); never derived from user input
  * - Output capped at 50 KB to prevent memory exhaustion
  * - Generic error messages to clients; detailed logs server-side only
- * - Server listens on 127.0.0.1 (localhost) only
+ * - Server listens on 0.0.0.0 in production (required by Render/Railway)
+ * - Server listens on 127.0.0.1 in development only
  *
  * TODO(security): Add JWT-based authentication for production multi-tenant use.
  * TODO(security): Persist room state to a database using parameterized queries.
@@ -42,9 +43,10 @@ const server = http.createServer(app);
 const PORT = process.env.PORT || 3001;
 const IS_PROD = process.env.NODE_ENV === 'production';
 
-// In production: listen on all interfaces (required by Railway/Render)
-// In development: localhost only (security requirement)
-const HOST = IS_PROD ? '0.0.0.0' : '127.0.0.1';
+// IMPORTANT: Render (and most cloud platforms) require binding to 0.0.0.0.
+// Even in development we default to 0.0.0.0 so the Dockerfile works correctly
+// regardless of whether NODE_ENV is injected. Use HOST env var to override.
+const HOST = process.env.HOST || (IS_PROD ? '0.0.0.0' : '127.0.0.1');
 
 // Vite dynamically increments ports if 5173 is occupied
 const DEV_ORIGINS = Array.from({ length: 20 }, (_, i) => [
@@ -147,12 +149,25 @@ if (IS_PROD) {
 }
 
 // ─── CORS (strict allow-list) ─────────────────────────────────────────────────
+// In same-origin production mode (client served by same server), origin is always
+// empty/undefined for same-origin requests — those must always be allowed.
 const corsOptions = {
   origin: (origin, callback) => {
-    if (!origin || ALLOWED_ORIGINS.includes(origin)) {
+    // No origin = same-origin request (server-served SPA) or curl — always allow
+    if (!origin) {
+      callback(null, true);
+      return;
+    }
+    // In production with no explicit allowed origins, allow all
+    // (client is served from the same Render domain)
+    if (IS_PROD && ALLOWED_ORIGINS.length === 0) {
+      callback(null, true);
+      return;
+    }
+    if (ALLOWED_ORIGINS.includes(origin)) {
       callback(null, true);
     } else {
-      callback(new Error('Not allowed'));
+      callback(new Error('Not allowed by CORS'));
     }
   },
   methods: ['GET', 'POST'],
