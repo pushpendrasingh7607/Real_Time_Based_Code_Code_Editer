@@ -120,22 +120,32 @@ Object.entries(RUNTIME_BINARIES).forEach(([name, binPath]) => {
   }
 });
 
-// ─── Security Headers (Helmet) ────────────────────────────────────────────────
+// ─── Security Headers (Helmet) ─────────────────────────────────────────────────
 app.use(
   helmet({
     contentSecurityPolicy: {
       directives: {
         defaultSrc:  ["'self'"],
-        scriptSrc:   ["'self'"],
+        // Monaco Editor requires 'unsafe-eval' for its language workers
+        // and blob: for spawning web workers via blob URLs
+        scriptSrc:   ["'self'", "'unsafe-eval'", 'blob:'],
         styleSrc:    ["'self'", "'unsafe-inline'"],
         imgSrc:      ["'self'", 'data:'],
-        connectSrc:  ["'self'", ...ALLOWED_ORIGINS,
-                      // Allow WebSocket connections from same origins
-                      ...ALLOWED_ORIGINS.map(o => o.replace('http', 'ws'))],
+        // Allow WebSocket (ws/wss) connections — Socket.IO needs this
+        // In same-origin mode ALLOWED_ORIGINS may be empty, so add 'self' + wss wildcard
+        connectSrc:  [
+          "'self'",
+          'ws:', 'wss:',           // allow WebSocket to same host
+          ...ALLOWED_ORIGINS,
+          ...ALLOWED_ORIGINS.map(o => o.replace('https', 'wss').replace('http', 'ws')),
+        ],
         fontSrc:     ["'self'", 'https://fonts.gstatic.com'],
         objectSrc:   ["'none'"],
         frameSrc:    ["'none'"],
         frameAncestors: ["'none'"],
+        // Monaco Editor spawns web workers via blob: URLs — must allow this
+        workerSrc:   ["'self'", 'blob:'],
+        childSrc:    ["'self'", 'blob:'],
       },
     },
     crossOriginEmbedderPolicy: false,
