@@ -12,7 +12,31 @@
  * - No dangerouslySetInnerHTML; Monaco manages its own safe DOM
  */
 import React, { useRef, useCallback, useEffect } from 'react';
-import MonacoEditor from '@monaco-editor/react';
+import MonacoEditor, { loader } from '@monaco-editor/react';
+
+// ── Critical: use local npm monaco-editor instead of CDN (jsDelivr) ──────────
+// By default @monaco-editor/react loads Monaco from cdn.jsdelivr.net which is
+// blocked by our CSP. Pointing loader to the local npm package fixes the
+// "Loading editor..." hang in production.
+import * as monaco from 'monaco-editor';
+import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
+import jsonWorker from 'monaco-editor/esm/vs/language/json/json.worker?worker';
+import cssWorker from 'monaco-editor/esm/vs/language/css/css.worker?worker';
+import htmlWorker from 'monaco-editor/esm/vs/language/html/html.worker?worker';
+import tsWorker from 'monaco-editor/esm/vs/language/typescript/ts.worker?worker';
+
+self.MonacoEnvironment = {
+  getWorker(_, label) {
+    if (label === 'json') return new jsonWorker();
+    if (label === 'css' || label === 'scss' || label === 'less') return new cssWorker();
+    if (label === 'html' || label === 'handlebars' || label === 'razor') return new htmlWorker();
+    if (label === 'typescript' || label === 'javascript') return new tsWorker();
+    return new editorWorker();
+  },
+};
+
+loader.config({ monaco });
+
 
 // Debounce helper
 function debounce(fn, delay) {

@@ -16,7 +16,9 @@ import Sidebar from './Sidebar';
 import Editor from './Editor';
 import OutputPanel from './OutputPanel';
 
-const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'http://127.0.0.1:3001';
+// In production (same-origin deploy on Render): VITE_SERVER_URL is unset → use '' so
+// fetch('/execute') hits the same Render server. In dev: use env var (localhost:3001).
+const SERVER_URL = import.meta.env.VITE_SERVER_URL ?? '';
 
 const DEFAULT_CODE = '# Welcome to CodeSync!\n# Start typing to share code in real-time.\n\nprint("Hello, World!")';
 const DEFAULT_LANG = 'python';
