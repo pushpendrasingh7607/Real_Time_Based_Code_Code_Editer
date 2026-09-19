@@ -43,20 +43,13 @@ const server = http.createServer(app);
 const PORT = process.env.PORT || 3001;
 const IS_PROD = process.env.NODE_ENV === 'production';
 
-// IMPORTANT: Render (and most cloud platforms) require binding to 0.0.0.0.
-// Even in development we default to 0.0.0.0 so the Dockerfile works correctly
-// regardless of whether NODE_ENV is injected. Use HOST env var to override.
 const HOST = process.env.HOST || (IS_PROD ? '0.0.0.0' : '127.0.0.1');
 
-// Vite dynamically increments ports if 5173 is occupied
 const DEV_ORIGINS = Array.from({ length: 20 }, (_, i) => [
   `http://localhost:${5173 + i}`,
   `http://127.0.0.1:${5173 + i}`,
 ]).flat();
 
-// In production, CLIENT_URL env var must be set to your Vercel URL
-// e.g. https://codesync.vercel.app
-// In production: CLIENT_URL (manual override) OR Render auto-sets RENDER_EXTERNAL_URL
 const PROD_ORIGINS = [];
 if (process.env.CLIENT_URL) {
   PROD_ORIGINS.push(
@@ -77,11 +70,14 @@ if (IS_PROD && PROD_ORIGINS.length === 0) {
 
 const ALLOWED_ORIGINS = IS_PROD ? PROD_ORIGINS : DEV_ORIGINS;
 
-const MAX_CODE_LENGTH   = 500_000;  // 500 KB
-const MAX_USERNAME_LENGTH = 32;
-const MAX_ROOM_ID_LENGTH  = 64;
-const EXEC_TIMEOUT_MS   = 10_000;  // 10 seconds max execution time
-const MAX_OUTPUT_BYTES  = 50_000;  // 50 KB max output
+const MAX_CODE_LENGTH    = 500_000;  // 500 KB
+const MAX_USERNAME_LENGTH  = 32;
+const MAX_ROOM_ID_LENGTH   = 64;
+const MAX_FILE_NAME_LENGTH = 128;
+const MAX_FILE_PATH_LENGTH = 512;
+const MAX_FILES_PER_ROOM   = 200;
+const EXEC_TIMEOUT_MS    = 10_000;  // 10 seconds max execution time
+const MAX_OUTPUT_BYTES   = 50_000;  // 50 KB max output
 
 // ─── Allowed programming languages (allow-list) ──────────────────────────────
 const ALLOWED_LANGUAGES = new Set([
@@ -90,12 +86,41 @@ const ALLOWED_LANGUAGES = new Set([
   'css', 'json', 'yaml', 'markdown', 'sql', 'shell', 'plaintext',
 ]);
 
+// ─── Extension → Language mapping ────────────────────────────────────────────
+const EXT_LANG_MAP = {
+  js: 'javascript', jsx: 'javascript', mjs: 'javascript', cjs: 'javascript',
+  ts: 'typescript', tsx: 'typescript',
+  py: 'python',
+  java: 'java',
+  c: 'c', h: 'c',
+  cpp: 'cpp', cc: 'cpp', cxx: 'cpp', hpp: 'cpp',
+  cs: 'csharp',
+  go: 'go',
+  rs: 'rust',
+  rb: 'ruby',
+  php: 'php',
+  swift: 'swift',
+  kt: 'kotlin',
+  scala: 'scala',
+  html: 'html', htm: 'html',
+  css: 'css', scss: 'css', sass: 'css', less: 'css',
+  json: 'json',
+  yaml: 'yaml', yml: 'yaml',
+  md: 'markdown', mdx: 'markdown',
+  sql: 'sql',
+  sh: 'shell', bash: 'shell', zsh: 'shell',
+  txt: 'plaintext',
+  env: 'plaintext', gitignore: 'plaintext', dockerfile: 'plaintext',
+};
+
+function langFromFilename(filename) {
+  const ext = filename.split('.').pop()?.toLowerCase() ?? '';
+  return EXT_LANG_MAP[ext] || 'plaintext';
+}
+
 // ─── Hardcoded binary paths (allow-list) ─────────────────────────────────────
-// In Docker: standard Debian paths. In macOS dev: homebrew paths.
-// Security: binary paths are NEVER derived from user input.
 const RUNTIME_BINARIES = IS_PROD
   ? {
-      // Paths inside the Debian-based Docker container
       node:    process.execPath,
       python3: '/usr/bin/python3',
       java:    '/usr/bin/java',
@@ -104,7 +129,6 @@ const RUNTIME_BINARIES = IS_PROD
       gpp:     '/usr/bin/g++',
     }
   : {
-      // macOS development paths
       node:    process.execPath,
       python3: '/opt/homebrew/bin/python3',
       java:    '/usr/bin/java',
@@ -113,7 +137,6 @@ const RUNTIME_BINARIES = IS_PROD
       gpp:     '/usr/bin/g++',
     };
 
-// Validate that binaries exist at startup
 Object.entries(RUNTIME_BINARIES).forEach(([name, binPath]) => {
   if (!fs.existsSync(binPath)) {
     console.warn(`[WARN] Runtime binary not found: ${name} → ${binPath}`);
@@ -126,24 +149,20 @@ app.use(
     contentSecurityPolicy: {
       directives: {
         defaultSrc:  ["'self'"],
-        // Monaco Editor requires 'unsafe-eval' for its language workers
-        // and blob: for spawning web workers via blob URLs
         scriptSrc:   ["'self'", "'unsafe-eval'", 'blob:'],
         styleSrc:    ["'self'", "'unsafe-inline'"],
         imgSrc:      ["'self'", 'data:'],
-        // Allow WebSocket (ws/wss) connections — Socket.IO needs this
-        // In same-origin mode ALLOWED_ORIGINS may be empty, so add 'self' + wss wildcard
         connectSrc:  [
           "'self'",
-          'ws:', 'wss:',           // allow WebSocket to same host
+          'ws:', 'wss:',
           ...ALLOWED_ORIGINS,
           ...ALLOWED_ORIGINS.map(o => o.replace('https', 'wss').replace('http', 'ws')),
         ],
         fontSrc:     ["'self'", 'https://fonts.gstatic.com'],
         objectSrc:   ["'none'"],
-        frameSrc:    ["'none'"],
+        // Allow sandboxed iframes for HTML preview (srcdoc)
+        frameSrc:    ["'self'", 'blob:'],
         frameAncestors: ["'none'"],
-        // Monaco Editor spawns web workers via blob: URLs — must allow this
         workerSrc:   ["'self'", 'blob:'],
         childSrc:    ["'self'", 'blob:'],
       },
@@ -153,27 +172,15 @@ app.use(
   })
 );
 
-// Trust proxy headers from Railway/Render/Vercel load balancers
 if (IS_PROD) {
   app.set('trust proxy', 1);
 }
 
-// ─── CORS (strict allow-list) ─────────────────────────────────────────────────
-// In same-origin production mode (client served by same server), origin is always
-// empty/undefined for same-origin requests — those must always be allowed.
+// ─── CORS ─────────────────────────────────────────────────────────────────────
 const corsOptions = {
   origin: (origin, callback) => {
-    // No origin = same-origin request (server-served SPA) or curl — always allow
-    if (!origin) {
-      callback(null, true);
-      return;
-    }
-    // In production with no explicit allowed origins, allow all
-    // (client is served from the same Render domain)
-    if (IS_PROD && ALLOWED_ORIGINS.length === 0) {
-      callback(null, true);
-      return;
-    }
+    if (!origin) { callback(null, true); return; }
+    if (IS_PROD && ALLOWED_ORIGINS.length === 0) { callback(null, true); return; }
     if (ALLOWED_ORIGINS.includes(origin)) {
       callback(null, true);
     } else {
@@ -194,10 +201,9 @@ const generalLimiter = rateLimit({
   message: { error: 'Too many requests, please try again later.' },
 });
 
-// Stricter limit for code execution to prevent abuse
 const executeLimiter = rateLimit({
-  windowMs: 60 * 1000,   // 1 minute window
-  max: 30,               // 30 executions per minute per IP
+  windowMs: 60 * 1000,
+  max: 30,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many execution requests. Please slow down.' },
@@ -212,24 +218,17 @@ app.get('/health', (_req, res) => {
 });
 
 // ─── Code Execution Engine ────────────────────────────────────────────────────
-
-/**
- * Runs a child process with a timeout.
- * Security: spawn() never invokes a shell; args are passed as an array.
- * @returns {Promise<{stdout: string, stderr: string, exitCode: number}>}
- */
 function runProcess(binary, args, { cwd, stdin, timeoutMs } = {}) {
   return new Promise((resolve) => {
     const proc = spawn(binary, args, {
       cwd: cwd || os.tmpdir(),
       stdio: ['pipe', 'pipe', 'pipe'],
       env: {
-        // Minimal environment — never pass through user-supplied env vars
         PATH: '/usr/bin:/bin:/opt/homebrew/bin',
         HOME: os.homedir(),
         TMPDIR: os.tmpdir(),
       },
-      shell: false, // NEVER use shell: true (command injection risk)
+      shell: false,
     });
 
     let stdout = '';
@@ -274,42 +273,27 @@ function runProcess(binary, args, { cwd, stdin, timeoutMs } = {}) {
 
     proc.on('error', (err) => {
       clearTimeout(timer);
-      // Log internally but don't expose details to client
       console.error('[Exec] Process error:', err.code);
       resolve({ stdout: '', stderr: 'Execution failed.', exitCode: -1, timedOut: false });
     });
   });
 }
 
-/**
- * Safely removes a file; logs but doesn't throw on failure.
- */
 function safeUnlink(filePath) {
   try { fs.unlinkSync(filePath); } catch { /* ignored */ }
 }
 
-/**
- * Safely removes a directory (and contents); logs but doesn't throw on failure.
- */
 function safeRmDir(dirPath) {
   try { fs.rmSync(dirPath, { recursive: true, force: true }); } catch { /* ignored */ }
 }
 
-/**
- * Executes code for a given language.
- * Returns { output: string, error: boolean }
- */
 async function executeCode(language, code) {
-  const tmpId   = uuidv4();
-  const tmpDir  = path.join(os.tmpdir(), `codesync-${tmpId}`);
-
-  // Create a unique temp directory for this execution
+  const tmpId  = uuidv4();
+  const tmpDir = path.join(os.tmpdir(), `codesync-${tmpId}`);
   fs.mkdirSync(tmpDir, { mode: 0o700 });
 
   try {
     switch (language) {
-
-      // ── JavaScript ───────────────────────────────────────────────────────
       case 'javascript': {
         const filePath = path.join(tmpDir, 'main.js');
         fs.writeFileSync(filePath, code, { mode: 0o600 });
@@ -318,7 +302,24 @@ async function executeCode(language, code) {
         return formatResult(result);
       }
 
-      // ── Python ───────────────────────────────────────────────────────────
+      case 'typescript': {
+        // Run TypeScript via ts-node if available, otherwise fallback message
+        const filePath = path.join(tmpDir, 'main.ts');
+        fs.writeFileSync(filePath, code, { mode: 0o600 });
+        // Strip types naively and run as JS (simple approach without ts-node)
+        const stripped = code
+          .replace(/:\s*\w+(\[\])?(\s*\|[^=,);\n]+)*/g, '')
+          .replace(/<[^>]+>/g, '')
+          .replace(/interface\s+\w+\s*\{[^}]*\}/g, '')
+          .replace(/type\s+\w+\s*=\s*[^;]+;/g, '');
+        const jsPath = path.join(tmpDir, 'main.js');
+        fs.writeFileSync(jsPath, stripped, { mode: 0o600 });
+        const result = await runProcess(RUNTIME_BINARIES.node, ['main.js'], { cwd: tmpDir });
+        safeUnlink(filePath);
+        safeUnlink(jsPath);
+        return formatResult(result);
+      }
+
       case 'python': {
         const filePath = path.join(tmpDir, 'main.py');
         fs.writeFileSync(filePath, code, { mode: 0o600 });
@@ -327,55 +328,38 @@ async function executeCode(language, code) {
         return formatResult(result);
       }
 
-      // ── Java ─────────────────────────────────────────────────────────────
       case 'java': {
-        // Extract public class name from code; default to Main
         const classMatch = code.match(/public\s+class\s+(\w+)/);
         const className  = classMatch ? classMatch[1] : 'Main';
         const filePath   = path.join(tmpDir, `${className}.java`);
         fs.writeFileSync(filePath, code, { mode: 0o600 });
 
-        // Compile step
         const compileResult = await runProcess(
-          RUNTIME_BINARIES.javac,
-          [`${className}.java`],
+          RUNTIME_BINARIES.javac, [`${className}.java`],
           { cwd: tmpDir, timeoutMs: 20_000 }
         );
         if (compileResult.exitCode !== 0) {
           safeUnlink(filePath);
-          return {
-            output: sanitizeSystemPaths(compileResult.stderr || compileResult.stdout || 'Compilation failed.'),
-            error: true,
-          };
+          return { output: sanitizeSystemPaths(compileResult.stderr || compileResult.stdout || 'Compilation failed.'), error: true };
         }
 
-        // Run step
-        const runResult = await runProcess(
-          RUNTIME_BINARIES.java,
-          ['-cp', '.', className],
-          { cwd: tmpDir }
-        );
+        const runResult = await runProcess(RUNTIME_BINARIES.java, ['-cp', '.', className], { cwd: tmpDir });
         safeUnlink(filePath);
         return formatResult(runResult);
       }
 
-      // ── C ────────────────────────────────────────────────────────────────
       case 'c': {
         const srcPath = path.join(tmpDir, 'main.c');
         const binPath = path.join(tmpDir, 'main_out');
         fs.writeFileSync(srcPath, code, { mode: 0o600 });
 
         const compileResult = await runProcess(
-          RUNTIME_BINARIES.gcc,
-          ['-o', 'main_out', 'main.c', '-lm'],
+          RUNTIME_BINARIES.gcc, ['-o', 'main_out', 'main.c', '-lm'],
           { cwd: tmpDir, timeoutMs: 20_000 }
         );
         if (compileResult.exitCode !== 0) {
           safeUnlink(srcPath);
-          return {
-            output: sanitizeSystemPaths(compileResult.stderr || compileResult.stdout || 'Compilation failed.'),
-            error: true,
-          };
+          return { output: sanitizeSystemPaths(compileResult.stderr || compileResult.stdout || 'Compilation failed.'), error: true };
         }
 
         const runResult = await runProcess(binPath, [], { cwd: tmpDir });
@@ -384,23 +368,18 @@ async function executeCode(language, code) {
         return formatResult(runResult);
       }
 
-      // ── C++ ──────────────────────────────────────────────────────────────
       case 'cpp': {
         const srcPath = path.join(tmpDir, 'main.cpp');
         const binPath = path.join(tmpDir, 'main_out');
         fs.writeFileSync(srcPath, code, { mode: 0o600 });
 
         const compileResult = await runProcess(
-          RUNTIME_BINARIES.gpp,
-          ['-o', 'main_out', 'main.cpp', '-std=c++17', '-lm'],
+          RUNTIME_BINARIES.gpp, ['-o', 'main_out', 'main.cpp', '-std=c++17', '-lm'],
           { cwd: tmpDir, timeoutMs: 20_000 }
         );
         if (compileResult.exitCode !== 0) {
           safeUnlink(srcPath);
-          return {
-            output: sanitizeSystemPaths(compileResult.stderr || compileResult.stdout || 'Compilation failed.'),
-            error: true,
-          };
+          return { output: sanitizeSystemPaths(compileResult.stderr || compileResult.stdout || 'Compilation failed.'), error: true };
         }
 
         const runResult = await runProcess(binPath, [], { cwd: tmpDir });
@@ -411,20 +390,15 @@ async function executeCode(language, code) {
 
       default:
         return {
-          output: `// Execution is not supported for "${language}".\n// Supported: JavaScript, Python, Java, C, C++`,
+          output: `// Execution is not supported for "${language}".\n// Runnable: JavaScript, TypeScript, Python, Java, C, C++`,
           error: false,
         };
     }
   } finally {
-    // Always clean up temp directory (security: no leftover files)
     safeRmDir(tmpDir);
   }
 }
 
-/**
- * Strips internal system paths from error output to avoid leaking server info.
- * Security: never expose absolute tmp paths to clients.
- */
 function sanitizeSystemPaths(text) {
   return text
     .replace(/\/tmp\/codesync-[a-z0-9-]+\//g, '')
@@ -432,9 +406,6 @@ function sanitizeSystemPaths(text) {
     .trim();
 }
 
-/**
- * Formats a process result into a client-safe output string.
- */
 function formatResult({ stdout, stderr, exitCode, timedOut }) {
   if (timedOut) {
     return { output: '⏱ Execution timed out (10 seconds limit).', error: true };
@@ -452,11 +423,9 @@ function formatResult({ stdout, stderr, exitCode, timedOut }) {
 app.post('/execute', executeLimiter, async (req, res) => {
   const { code, language } = req.body;
 
-  // Validate inputs
   if (typeof code !== 'string' || code.length === 0 || code.length > MAX_CODE_LENGTH) {
     return res.status(400).json({ error: 'Invalid code.' });
   }
-  // Validate language against allow-list (security: never derive exec path from user input)
   if (!ALLOWED_LANGUAGES.has(language)) {
     return res.status(400).json({ error: 'Unsupported language.' });
   }
@@ -465,21 +434,28 @@ app.post('/execute', executeLimiter, async (req, res) => {
     const result = await executeCode(language, code);
     res.json(result);
   } catch (err) {
-    // Log detailed error server-side only; return generic message to client
     console.error('[Execute] Internal error:', err.message);
     res.status(500).json({ output: 'An error occurred during execution.', error: true });
   }
 });
 
 // ─── In-memory room state ─────────────────────────────────────────────────────
+// Room shape:
+// {
+//   users: Map<socketId, { id, username, color }>,
+//   files: Map<fileId, { id, name, path, language, content }>,
+//   folders: [{ id, name, path, parentPath }],
+// }
+// Rooms start empty (like VS Code's new window). Users open/create files themselves.
+
 const rooms = new Map();
 
 function getOrCreateRoom(roomId) {
   if (!rooms.has(roomId)) {
     rooms.set(roomId, {
-      code: '# Welcome to CodeSync!\n# Start typing to share code in real-time.\n\nprint("Hello, World!")',
-      language: 'python',
       users: new Map(),
+      files: new Map(),
+      folders: [],
     });
   }
   return rooms.get(roomId);
@@ -490,6 +466,14 @@ function cleanupRoom(roomId) {
   if (room && room.users.size === 0) rooms.delete(roomId);
 }
 
+function roomSnapshot(room) {
+  return {
+    files: Array.from(room.files.values()),
+    folders: room.folders,
+    users: Array.from(room.users.values()),
+  };
+}
+
 // ─── Input Validation Helpers ─────────────────────────────────────────────────
 function isValidString(val, maxLen) {
   return typeof val === 'string' && val.length > 0 && val.length <= maxLen;
@@ -497,6 +481,28 @@ function isValidString(val, maxLen) {
 
 function sanitizeUsername(name) {
   return name.replace(/[^\x20-\x7E]/g, '').trim().slice(0, MAX_USERNAME_LENGTH);
+}
+
+// Prevent path traversal: only allow safe path characters
+function isValidFilePath(p) {
+  return (
+    typeof p === 'string' &&
+    p.length > 0 &&
+    p.length <= MAX_FILE_PATH_LENGTH &&
+    !/\.\./.test(p) &&      // no parent traversal
+    !/^\//.test(p) &&       // no absolute paths
+    /^[\w\s./\-]+$/.test(p) // allowlist chars
+  );
+}
+
+function isValidFileName(n) {
+  return (
+    typeof n === 'string' &&
+    n.length > 0 &&
+    n.length <= MAX_FILE_NAME_LENGTH &&
+    /^[\w.\-\s]+$/.test(n) &&
+    !n.includes('..')
+  );
 }
 
 // ─── Socket.IO Setup ──────────────────────────────────────────────────────────
@@ -516,6 +522,7 @@ let globalUserCount = 0;
 io.on('connection', (socket) => {
   console.log(`[WS] Client connected: ${socket.id}`);
 
+  // ── join-room ────────────────────────────────────────────────────────────
   socket.on('join-room', ({ roomId, username }) => {
     if (!isValidString(roomId, MAX_ROOM_ID_LENGTH)) {
       socket.emit('error-msg', { message: 'Invalid room ID.' }); return;
@@ -525,7 +532,7 @@ io.on('connection', (socket) => {
       : `User-${socket.id.slice(0, 4)}`;
 
     socket.join(roomId);
-    socket.data.roomId  = roomId;
+    socket.data.roomId   = roomId;
     socket.data.username = cleanName;
 
     const room = getOrCreateRoom(roomId);
@@ -535,43 +542,222 @@ io.on('connection', (socket) => {
       color: USER_COLORS[globalUserCount % USER_COLORS.length],
     });
 
-    socket.emit('room-state', {
-      code: room.code, language: room.language,
-      users: Array.from(room.users.values()),
-    });
+    // Send full project state to the joining user
+    socket.emit('project-state', roomSnapshot(room));
+
+    // Notify others of the new user
     socket.to(roomId).emit('user-joined', {
       user: room.users.get(socket.id),
       users: Array.from(room.users.values()),
     });
+
     console.log(`[WS] ${cleanName} joined room: ${roomId} (${room.users.size} users)`);
   });
 
-  socket.on('code-change', ({ roomId, code, version }) => {
+  // ── file-change: content edit for an existing file ────────────────────────
+  socket.on('file-change', ({ roomId, fileId, content, version }) => {
     if (!isValidString(roomId, MAX_ROOM_ID_LENGTH)) return;
-    if (typeof code !== 'string' || code.length > MAX_CODE_LENGTH) return;
-    if (typeof version !== 'number') return;
+    if (!isValidString(fileId, 64)) return;
+    if (typeof content !== 'string' || content.length > MAX_CODE_LENGTH) return;
+
     const room = rooms.get(roomId);
     if (!room) return;
-    room.code = code;
-    room.version = version;
-    socket.to(roomId).emit('code-update', { code, version, senderId: socket.id });
+    const file = room.files.get(fileId);
+    if (!file) return;
+
+    file.content = content;
+    file.version = version;
+
+    socket.to(roomId).emit('file-update', { fileId, content, version, senderId: socket.id });
   });
 
-  socket.on('cursor-change', ({ roomId, position }) => {
+  // ── file-create: new file ─────────────────────────────────────────────────
+  socket.on('file-create', ({ roomId, name, folderPath, content }) => {
+    if (!isValidString(roomId, MAX_ROOM_ID_LENGTH)) return;
+    if (!isValidFileName(name)) return;
+
+    const room = rooms.get(roomId);
+    if (!room) return;
+    if (room.files.size >= MAX_FILES_PER_ROOM) {
+      socket.emit('error-msg', { message: 'Max file limit reached.' }); return;
+    }
+
+    const safeFolderPath = (folderPath && isValidFilePath(folderPath)) ? folderPath : '';
+    const filePath = safeFolderPath ? `${safeFolderPath}/${name}` : name;
+
+    // Prevent duplicate paths — if file already exists, skip silently (bulk import)
+    const exists = Array.from(room.files.values()).some(f => f.path === filePath);
+    if (exists) return; // silent skip for bulk import
+
+    // Validate and sanitize content (accept optional content for file-open imports)
+    const safeContent = (typeof content === 'string' && content.length <= MAX_CODE_LENGTH)
+      ? content
+      : '';
+
+    const fileId = uuidv4();
+    const language = langFromFilename(name);
+    const file = { id: fileId, name, path: filePath, language, content: safeContent };
+    room.files.set(fileId, file);
+
+    io.to(roomId).emit('file-created', { file });
+    console.log(`[WS] File created: ${filePath} in room ${roomId}`);
+  });
+
+  // ── folder-create: new folder ─────────────────────────────────────────────
+  socket.on('folder-create', ({ roomId, name, parentPath }) => {
+    if (!isValidString(roomId, MAX_ROOM_ID_LENGTH)) return;
+    if (!isValidFileName(name)) return;
+
+    const room = rooms.get(roomId);
+    if (!room) return;
+
+    const safeParentPath = isValidFilePath(parentPath) ? parentPath : '';
+    const folderPath = safeParentPath ? `${safeParentPath}/${name}` : name;
+
+    const exists = room.folders.some(f => f.path === folderPath);
+    if (exists) {
+      socket.emit('error-msg', { message: 'A folder with that name already exists.' }); return;
+    }
+
+    const folder = { id: uuidv4(), name, path: folderPath, parentPath: safeParentPath };
+    room.folders.push(folder);
+
+    io.to(roomId).emit('folder-created', { folder });
+  });
+
+  // ── bulk-import: folder open / drag-drop ─────────────────────────────────
+  // Accepts { roomId, folders: [{name, parentPath}], files: [{name, folderPath, content}] }
+  // Processes everything in a single handler and emits one 'bulk-imported' event.
+  socket.on('bulk-import', ({ roomId, folders: inFolders, files: inFiles }) => {
+    if (!isValidString(roomId, MAX_ROOM_ID_LENGTH)) return;
+
+    const room = rooms.get(roomId);
+    if (!room) return;
+
+    const createdFolders = [];
+    const createdFiles   = [];
+
+    // --- Folders (parents before children — they're already sorted by the client) ---
+    if (Array.isArray(inFolders)) {
+      for (const { name, parentPath } of inFolders) {
+        if (!isValidFileName(name)) continue;
+        const safeParent = isValidFilePath(parentPath) ? parentPath : '';
+        const folderPath = safeParent ? `${safeParent}/${name}` : name;
+        const exists = room.folders.some(f => f.path === folderPath);
+        if (exists) continue; // deduplicate silently
+        const folder = { id: uuidv4(), name, path: folderPath, parentPath: safeParent };
+        room.folders.push(folder);
+        createdFolders.push(folder);
+      }
+    }
+
+    // --- Files ---
+    if (Array.isArray(inFiles)) {
+      for (const { name, folderPath, content } of inFiles) {
+        if (!isValidFileName(name)) continue;
+        if (room.files.size >= MAX_FILES_PER_ROOM) break; // cap
+
+        const safeFolderPath = (folderPath && isValidFilePath(folderPath)) ? folderPath : '';
+        const filePath = safeFolderPath ? `${safeFolderPath}/${name}` : name;
+
+        // Deduplicate
+        const exists = Array.from(room.files.values()).some(f => f.path === filePath);
+        if (exists) continue;
+
+        const safeContent = (typeof content === 'string' && content.length <= MAX_CODE_LENGTH)
+          ? content
+          : '';
+
+        const fileId = uuidv4();
+        const language = langFromFilename(name);
+        const file = { id: fileId, name, path: filePath, language, content: safeContent };
+        room.files.set(fileId, file);
+        createdFiles.push(file);
+      }
+    }
+
+    if (createdFolders.length === 0 && createdFiles.length === 0) return;
+
+    // Single broadcast for the entire import
+    io.to(roomId).emit('bulk-imported', {
+      folders: createdFolders,
+      files: createdFiles,
+    });
+
+    console.log(`[WS] Bulk import in room ${roomId}: ${createdFolders.length} folders, ${createdFiles.length} files`);
+  });
+
+  // ── file-delete ───────────────────────────────────────────────────────────
+  socket.on('file-delete', ({ roomId, fileId }) => {
+    if (!isValidString(roomId, MAX_ROOM_ID_LENGTH)) return;
+    if (!isValidString(fileId, 64)) return;
+
+    const room = rooms.get(roomId);
+    if (!room) return;
+    if (!room.files.has(fileId)) return;
+
+    room.files.delete(fileId);
+    io.to(roomId).emit('file-deleted', { fileId });
+  });
+
+  // ── folder-delete ─────────────────────────────────────────────────────────
+  socket.on('folder-delete', ({ roomId, folderPath }) => {
+    if (!isValidString(roomId, MAX_ROOM_ID_LENGTH)) return;
+    if (!isValidFilePath(folderPath)) return;
+
+    const room = rooms.get(roomId);
+    if (!room) return;
+
+    // Delete all files within this folder
+    const deletedFileIds = [];
+    for (const [id, file] of room.files) {
+      if (file.path.startsWith(folderPath + '/') || file.path === folderPath) {
+        room.files.delete(id);
+        deletedFileIds.push(id);
+      }
+    }
+
+    // Delete nested folders
+    room.folders = room.folders.filter(f => !f.path.startsWith(folderPath));
+
+    io.to(roomId).emit('folder-deleted', { folderPath, deletedFileIds });
+  });
+
+  // ── file-rename ───────────────────────────────────────────────────────────
+  socket.on('file-rename', ({ roomId, fileId, newName }) => {
+    if (!isValidString(roomId, MAX_ROOM_ID_LENGTH)) return;
+    if (!isValidString(fileId, 64)) return;
+    if (!isValidFileName(newName)) return;
+
+    const room = rooms.get(roomId);
+    if (!room) return;
+    const file = room.files.get(fileId);
+    if (!file) return;
+
+    const dir = file.path.includes('/') ? file.path.substring(0, file.path.lastIndexOf('/')) : '';
+    const newPath = dir ? `${dir}/${newName}` : newName;
+
+    // Check for duplicate
+    const conflict = Array.from(room.files.values()).some(f => f.path === newPath && f.id !== fileId);
+    if (conflict) {
+      socket.emit('error-msg', { message: 'A file with that name already exists.' }); return;
+    }
+
+    file.name = newName;
+    file.path = newPath;
+    file.language = langFromFilename(newName);
+
+    io.to(roomId).emit('file-renamed', { fileId, newName, newPath, language: file.language });
+  });
+
+  // ── cursor-change ─────────────────────────────────────────────────────────
+  socket.on('cursor-change', ({ roomId, fileId, position }) => {
     if (!isValidString(roomId, MAX_ROOM_ID_LENGTH)) return;
     if (!position || typeof position.lineNumber !== 'number' || typeof position.column !== 'number') return;
-    socket.to(roomId).emit('cursor-update', { userId: socket.id, position });
+    socket.to(roomId).emit('cursor-update', { userId: socket.id, fileId, position });
   });
 
-  socket.on('language-change', ({ roomId, language }) => {
-    if (!isValidString(roomId, MAX_ROOM_ID_LENGTH)) return;
-    if (!ALLOWED_LANGUAGES.has(language)) return;
-    const room = rooms.get(roomId);
-    if (!room) return;
-    room.language = language;
-    io.to(roomId).emit('language-update', { language });
-  });
-
+  // ── disconnect ────────────────────────────────────────────────────────────
   socket.on('disconnect', () => {
     const { roomId, username } = socket.data || {};
     if (!roomId) return;
@@ -588,15 +774,11 @@ io.on('connection', (socket) => {
   });
 });
 
-// ─── Serve built React frontend in production ────────────────────────────────
-// CLIENT_DIST env var allows overriding the path (set in Dockerfile for Docker deploys).
-// Local dev:  __dirname = .../realtime-code-editor/server  → '../client/dist' is correct
-// Docker:     __dirname = /app  (server.js copied flat) → must use /app/client/dist
+// ─── Serve built React frontend in production ─────────────────────────────────
 const CLIENT_DIST = process.env.CLIENT_DIST || path.join(__dirname, '..', 'client', 'dist');
 console.log(`[Static] CLIENT_DIST resolved to: ${CLIENT_DIST} (exists: ${fs.existsSync(CLIENT_DIST)})`);
 if (IS_PROD && fs.existsSync(CLIENT_DIST)) {
   app.use(express.static(CLIENT_DIST, { maxAge: '7d' }));
-  // SPA catch-all: any route not matched above returns index.html
   app.get('*', (_req, res) => {
     res.sendFile(path.join(CLIENT_DIST, 'index.html'));
   });
@@ -608,5 +790,5 @@ server.listen(PORT, HOST, () => {
   console.log(`✅ Server running at http://${HOST}:${PORT}`);
   console.log(`   Mode: ${IS_PROD ? 'PRODUCTION' : 'DEVELOPMENT'}`);
   console.log(`   Allowed origins: ${ALLOWED_ORIGINS.join(', ') || 'NONE (set CLIENT_URL env var)'}`);
-  console.log(`   Supported languages: JavaScript, Python, Java, C, C++`);
+  console.log(`   Supported languages: JavaScript, TypeScript, Python, Java, C, C++`);
 });
